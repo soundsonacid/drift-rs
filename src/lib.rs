@@ -82,6 +82,7 @@ pub mod auction_subscriber;
 pub mod blockhash_subscriber;
 pub mod dlob_client;
 pub mod event_subscriber;
+pub mod order_subscriber;
 
 #[cfg(feature = "jit")]
 pub mod jit_client;

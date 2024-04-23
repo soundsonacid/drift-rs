@@ -1,6 +1,7 @@
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::event_emitter::EventEmitter;
 use crate::memcmp::{get_non_idle_user_filter, get_user_filter};
@@ -8,7 +9,7 @@ use crate::utils::{decode, get_ws_url};
 use crate::websocket_program_account_subscriber::{
     ProgramAccountUpdate, WebsocketProgramAccountOptions, WebsocketProgramAccountSubscriber,
 };
-use crate::SdkResult;
+use crate::{DataAndSlot, SdkResult};
 use anchor_lang::AccountDeserialize;
 use dashmap::DashMap;
 use drift::state::user::User;
@@ -23,13 +24,14 @@ use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 
 pub struct UserMap {
-    subscribed: bool,
+    pub(crate) subscribed: bool,
     subscription: WebsocketProgramAccountSubscriber,
     pub(crate) usermap: Arc<DashMap<String, User>>,
     sync_lock: Option<Mutex<()>>,
     latest_slot: Arc<AtomicU64>,
     commitment: CommitmentConfig,
     rpc: RpcClient,
+    optional_callback: Option<Arc<dyn Fn(&ProgramAccountUpdate<User>) + Send + Sync>>,
 }
 
 impl UserMap {
@@ -40,6 +42,7 @@ impl UserMap {
         endpoint: String,
         sync: bool,
         additional_filters: Option<Vec<RpcFilterType>>,
+        optional_callback: Option<Arc<dyn Fn(&ProgramAccountUpdate<User>) + Send + Sync>>,
     ) -> Self {
         let mut filters = vec![get_user_filter(), get_non_idle_user_filter()];
         filters.extend(additional_filters.unwrap_or_default());
@@ -73,6 +76,7 @@ impl UserMap {
             latest_slot: Arc::new(AtomicU64::new(0)),
             commitment,
             rpc,
+            optional_callback,
         }
     }
 
@@ -87,6 +91,10 @@ impl UserMap {
 
             let usermap = self.usermap.clone();
             let latest_slot = self.latest_slot.clone();
+            let callback = match self.optional_callback {
+                Some(ref callback) => Some(callback.clone()),
+                None => None,
+            };
 
             self.subscription
                 .event_emitter
@@ -100,6 +108,9 @@ impl UserMap {
                             latest_slot.store(update.data_and_slot.slot, Ordering::Relaxed);
                         }
                         usermap.insert(user_pubkey, user_data_and_slot.data);
+                        if callback.is_some() {
+                            callback.as_ref().unwrap()(update);
+                        }
                     }
                 });
         }
@@ -138,13 +149,33 @@ impl UserMap {
                 .get_account_data(&Pubkey::from_str(pubkey).unwrap())
                 .await?;
             let user = User::try_deserialize(&mut user_data.as_slice()).unwrap();
+            let callback = match self.optional_callback {
+                Some(ref callback) => Some(callback.clone()),
+                None => None,
+            };
             self.usermap.insert(pubkey.to_string(), user);
+            if callback.is_some() {
+                callback.as_ref().unwrap()(&ProgramAccountUpdate::new(
+                    pubkey.to_string().clone(),
+                    DataAndSlot {
+                        data: user,
+                        slot: self.get_latest_slot(),
+                    },
+                    Instant::now(),
+                ));
+            }
             Ok(self.get(pubkey).unwrap())
         }
     }
 
     async fn sync(&mut self) -> SdkResult<()> {
+        dbg!("syncing");
         let sync_lock = self.sync_lock.as_ref().expect("expected sync lock");
+
+        let callback = match self.optional_callback {
+            Some(ref callback) => Some(callback.clone()),
+            None => None,
+        };
 
         let lock = match sync_lock.try_lock() {
             Ok(lock) => lock,
@@ -176,12 +207,24 @@ impl UserMap {
                 let pubkey = account.pubkey;
                 let user_data = account.account.data;
                 let data = decode::<User>(user_data)?;
-                self.usermap.insert(pubkey, data);
+                self.usermap.insert(pubkey.clone(), data);
+                if callback.is_some() {
+                    callback.as_ref().unwrap()(&ProgramAccountUpdate::new(
+                        pubkey,
+                        DataAndSlot {
+                            data,
+                            slot: accounts.context.slot,
+                        },
+                        Instant::now(),
+                    ));
+                }
             }
 
             self.latest_slot
                 .store(accounts.context.slot, Ordering::Relaxed);
         }
+
+        dbg!("sync over");
 
         drop(lock);
         Ok(())
@@ -194,20 +237,60 @@ impl UserMap {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    use solana_sdk::commitment_config::CommitmentConfig;
+    use solana_sdk::commitment_config::CommitmentLevel;
 
     #[tokio::test]
     #[cfg(rpc_tests)]
     async fn test_usermap() {
-        use crate::usermap::UserMap;
-        use solana_sdk::commitment_config::CommitmentConfig;
-        use solana_sdk::commitment_config::CommitmentLevel;
-
-        let endpoint = "rpc_url".to_string();
+        let endpoint = "rpc".to_string();
         let commitment = CommitmentConfig {
             commitment: CommitmentLevel::Processed,
         };
 
-        let mut usermap = UserMap::new(commitment, endpoint, true);
+        let mut usermap = UserMap::new(commitment, endpoint, true, None, None);
+        usermap.subscribe().await.unwrap();
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+
+        dbg!(usermap.size());
+        assert!(usermap.size() > 50000);
+
+        dbg!(usermap.get_latest_slot());
+
+        usermap.unsubscribe().await.unwrap();
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+
+        assert_eq!(usermap.size(), 0);
+        assert_eq!(usermap.subscribed, false);
+    }
+
+    #[tokio::test]
+    #[cfg(rpc_tests)]
+    async fn test_callback() {
+        use super::*;
+
+        let event_emitter = Box::leak(Box::new(EventEmitter::new()));
+
+        let endpoint = "rpc".to_string();
+        let commitment = CommitmentConfig {
+            commitment: CommitmentLevel::Processed,
+        };
+
+        let callback = Arc::new(|event: &ProgramAccountUpdate<User>| {
+            event_emitter.emit("test", Box::new(event.clone()));
+        });
+
+        event_emitter.subscribe("test", move |event| {
+            if let Some(event) = event.as_any().downcast_ref::<ProgramAccountUpdate<User>>() {
+                dbg!(event);
+            }
+        });
+
+        let mut usermap = UserMap::new(commitment, endpoint, true, None, Some(callback));
         usermap.subscribe().await.unwrap();
 
         tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;

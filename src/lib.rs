@@ -64,6 +64,7 @@ use crate::{
 
 // utils
 pub mod async_utils;
+pub mod market_operations;
 pub mod math;
 pub mod memcmp;
 pub mod utils;

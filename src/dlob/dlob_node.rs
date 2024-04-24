@@ -18,6 +18,15 @@ pub(crate) enum SortDirection {
     Descending,
 }
 
+pub struct NodeToTrigger {
+    pub node: Box<dyn DLOBNode>,
+}
+
+pub struct NodeToFill {
+    pub node: Box<dyn DLOBNode>,
+    pub maker_nodes: Vec<Box<dyn DLOBNode>>,
+}
+
 pub trait DLOBNode {
     fn get_price(&self, oracle_price_data: OraclePriceData, slot: u64) -> u64;
     fn is_vamm_node(&self) -> bool;

@@ -2,7 +2,7 @@ use drift::{
     controller::position::PositionDirection,
     state::{
         oracle::OraclePriceData,
-        user::{Order, OrderType},
+        user::{Order, OrderStatus, OrderType},
     },
 };
 
@@ -58,4 +58,21 @@ pub fn is_resting_limit_order(order: &Order, slot: u64) -> bool {
     };
 
     order.post_only || is_auction_complete(order, slot)
+}
+
+pub fn is_order_expired(order: &Order, ts: i64, enforce_buffer: bool) -> bool {
+    if order.must_be_triggered() || order.status != OrderStatus::Open || order.max_ts == 0_i64 {
+        return false;
+    }
+
+    let mut max_ts = order.max_ts;
+    if is_limit_order(order) && enforce_buffer {
+        max_ts += 15;
+    }
+
+    ts > max_ts
+}
+
+fn is_limit_order(order: &Order) -> bool {
+    matches!(order.order_type, OrderType::Limit | OrderType::TriggerLimit)
 }

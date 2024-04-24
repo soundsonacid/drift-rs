@@ -1,5 +1,6 @@
-use dashmap::{DashMap, DashSet};
+use dashmap::DashSet;
 use drift::state::oracle::OraclePriceData;
+use drift::state::state::{ExchangeStatus, State};
 use drift::state::user::{MarketType, Order, OrderStatus};
 use rayon::prelude::*;
 use solana_sdk::pubkey::Pubkey;
@@ -9,11 +10,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::dlob::dlob_node::{
-    create_node, get_order_signature, DLOBNode, DirectionalNode, Node, NodeType,
+    create_node, get_order_signature, DLOBNode, DirectionalNode, Node, NodeToFill, NodeToTrigger,
+    NodeType,
 };
-use crate::dlob::market::{get_node_subtype_and_type, Exchange, Market, OpenOrders, SubType};
+use crate::dlob::market::{get_node_subtype_and_type, Exchange, OpenOrders, SubType};
 use crate::event_emitter::Event;
-use crate::math::order::is_resting_limit_order;
+use crate::market_operations::MarketOperations;
+use crate::math::order::{is_order_expired, is_resting_limit_order};
 use crate::usermap::UserMap;
 use crate::utils::market_type_to_string;
 
@@ -281,6 +284,229 @@ impl DLOB {
         });
 
         all_orders
+    }
+
+    fn find_nodes_to_trigger(
+        self,
+        market_index: u16,
+        market_type: MarketType,
+        oracle_price: u64,
+        state: State,
+    ) {
+        if state.exchange_status != ExchangeStatus::active() {
+            return;
+        }
+
+        let mut nodes_to_trigger = vec![];
+
+        let market = match market_type {
+            MarketType::Perp => self.exchange.perp.get_mut(&market_index).expect("market"),
+            MarketType::Spot => self.exchange.spot.get_mut(&market_index).expect("market"),
+        };
+
+        let mut trigger_above_list = market.trigger_orders.bids.clone();
+        let mut trigger_below_list = market.trigger_orders.asks.clone();
+
+        while !trigger_above_list.is_empty() {
+            let node = trigger_above_list.pop().unwrap();
+            if node.node.get_order().trigger_price < oracle_price {
+                nodes_to_trigger.push(NodeToTrigger {
+                    node: Box::new(node.node),
+                });
+            } else {
+                break;
+            }
+        }
+
+        while !trigger_below_list.is_empty() {
+            let node = trigger_below_list.pop().unwrap();
+            if node.node.get_order().trigger_price > oracle_price {
+                nodes_to_trigger.push(NodeToTrigger {
+                    node: Box::new(node.node),
+                });
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn find_nodes_to_fill(
+        &mut self,
+        market: Box<dyn MarketOperations>,
+        fallback_bid: Option<u64>,
+        fallback_ask: Option<u64>,
+        slot: u64,
+        ts: i64,
+        oracle_price_data: OraclePriceData,
+        state: State,
+    ) {
+        if market.is_fill_paused(&state) {
+            return;
+        }
+
+        let is_amm_paused = market.is_amm_paused(&state);
+
+        let min_auction_duration = match market.market_type() {
+            MarketType::Perp => state.min_perp_auction_duration,
+            MarketType::Spot => 0_u8,
+        };
+
+        let (maker_rebate_numerator, maker_rebate_denominator) =
+            market.calculate_maker_rebate(&state);
+
+        let expired_nodes_to_fill =
+            self.find_expired_orders_to_fill(market.market_index(), market.market_type(), ts);
+    }
+
+    fn find_resting_orders_to_fill(
+        &self,
+        market: Box<dyn MarketOperations>,
+        slot: u64,
+        oracle_price_data: OraclePriceData,
+        is_amm_paused: bool,
+        min_auction_duration: u64,
+        maker_rebate_numerator: u64,
+        maker_rebate_denominator: u64,
+        fallback_bid: Option<u64>,
+        fallback_ask: Option<u64>,
+    ) {
+    }
+
+    fn find_taking_orders_to_fill() {}
+
+    fn find_expired_orders_to_fill(
+        &self,
+        market_index: u16,
+        market_type: MarketType,
+        ts: i64,
+    ) -> Vec<NodeToFill> {
+        let mut nodes_to_fill: Vec<NodeToFill> = vec![];
+
+        let markets = match market_type {
+            MarketType::Perp => self.exchange.perp.get_mut(&market_index).expect("market"),
+            MarketType::Spot => self.exchange.spot.get_mut(&market_index).expect("market"),
+        };
+
+        let mut bids = [
+            markets.taking_limit_orders.bids.clone(),
+            markets.resting_limit_orders.bids.clone(),
+            markets.floating_limit_orders.bids.clone(),
+            markets.market_orders.bids.clone(),
+        ];
+
+        let mut asks = [
+            markets.taking_limit_orders.asks.clone(),
+            markets.resting_limit_orders.asks.clone(),
+            markets.floating_limit_orders.asks.clone(),
+            markets.market_orders.asks.clone(),
+        ];
+
+        for bid_list in bids.iter_mut() {
+            while !bid_list.is_empty() {
+                let bid = bid_list.pop().unwrap();
+                if is_order_expired(bid.node.get_order(), ts, true) {
+                    nodes_to_fill.push(NodeToFill {
+                        node: Box::new(bid.node),
+                        maker_nodes: vec![],
+                    });
+                }
+            }
+        }
+
+        for ask_list in asks.iter_mut() {
+            while !ask_list.is_empty() {
+                let ask = ask_list.pop().unwrap();
+                if is_order_expired(ask.node.get_order(), ts, true) {
+                    nodes_to_fill.push(NodeToFill {
+                        node: Box::new(ask.node),
+                        maker_nodes: vec![],
+                    });
+                }
+            }
+        }
+
+        nodes_to_fill
+    }
+
+    fn find_crossing_resting_limit_orders(
+        &mut self,
+        market: Box<dyn MarketOperations>,
+        slot: u64,
+        oracle_price_data: OraclePriceData,
+    ) {
+        let mut nodes_to_fill: Vec<NodeToFill> = vec![];
+
+        let resting_limit_asks = self.get_resting_limit_asks(
+            slot,
+            market.market_type(),
+            market.market_index(),
+            oracle_price_data,
+        );
+        let resting_limit_bids = self.get_resting_limit_bids(
+            slot,
+            market.market_type(),
+            market.market_index(),
+            oracle_price_data,
+        );
+
+        for ask in resting_limit_asks.iter() {
+            let ask_price = ask.get_price(oracle_price_data, slot);
+            let ask_order = ask.get_order();
+
+            for bid in resting_limit_bids.iter() {
+                let bid_price = bid.get_price(oracle_price_data, slot);
+
+                if bid_price < ask_price {
+                    break;
+                }
+
+                let bid_order = bid.get_order();
+
+                if bid.get_user_account() == ask.get_user_account() {
+                    continue;
+                }
+
+                if let Some((maker, taker)) = DLOB::determine_maker_and_taker(ask, bid) {
+                    let bid_base_remaining =
+                        bid_order.base_asset_amount - bid_order.base_asset_amount_filled;
+                    let ask_base_remaining =
+                        ask_order.base_asset_amount - ask_order.base_asset_amount_filled;
+
+                    let base_filled = std::cmp::min(bid_base_remaining, ask_base_remaining);
+
+                    let mut new_bid_order = bid_order.clone();
+                    new_bid_order.base_asset_amount_filled =
+                        bid_order.base_asset_amount_filled + base_filled;
+                } else {
+                    continue;
+                }
+            }
+        }
+    }
+
+    fn determine_maker_and_taker(
+        ask: &Node,
+        bid: &Node,
+        // first node maker, second node taker
+    ) -> Option<(Node, Node)> {
+        let bid = bid.clone();
+        let ask = ask.clone();
+        let ask_order = ask.get_order();
+        let bid_order = bid.get_order();
+        let ask_slot = ask_order.slot + ask_order.auction_duration as u64;
+        let bid_slot = bid_order.slot + bid_order.auction_duration as u64;
+
+        if bid_order.post_only && ask_order.post_only {
+            None
+        } else if bid_order.post_only {
+            Some((ask, bid))
+        } else if ask_order.post_only {
+            Some((bid, ask))
+        } else if ask_slot <= bid_slot {
+            Some((bid, ask))
+        } else {
+            Some((ask, bid))
+        }
     }
 }
 

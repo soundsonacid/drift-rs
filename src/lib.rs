@@ -1,6 +1,6 @@
 //! Drift SDK
 
-use std::{borrow::Cow, rc::Rc, sync::Arc, time::Duration};
+use std::{borrow::Cow, sync::Arc, time::Duration};
 
 use anchor_lang::{AccountDeserialize, Discriminator, InstructionData, ToAccountMetas};
 use async_utils::{retry_policy, spawn_retry_task};
@@ -100,6 +100,8 @@ pub mod dlob;
 
 use types::*;
 
+type AccountCache = Arc<RwLock<FnvHashMap<Pubkey, Receiver<(Account, Slot)>>>>;
+
 /// Provides solana Account fetching API
 pub trait AccountProvider: 'static + Sized + Send + Sync {
     // TODO: async fn when it stabilizes
@@ -154,7 +156,7 @@ pub struct WsAccountProvider {
     url: String,
     rpc_client: Arc<RpcClient>,
     /// map from account pubkey to (account data, last modified ts)
-    account_cache: Arc<RwLock<FnvHashMap<Pubkey, Receiver<(Account, Slot)>>>>,
+    account_cache: AccountCache,
 }
 
 struct AccountSubscription {
@@ -757,10 +759,7 @@ impl<T: AccountProvider> DriftClientBackend<T> {
 
         let lookup_table_address = market_lookup_table(context);
 
-        let (markets, lookup_table_account): (
-            SdkResult<(Vec<SpotMarket>, Vec<PerpMarket>)>,
-            SdkResult<Account>,
-        ) = tokio::join!(
+        let (markets, lookup_table_account) = tokio::join!(
             get_market_accounts(&this.rpc_client),
             this.get_account_raw(&lookup_table_address),
         );
@@ -928,6 +927,7 @@ impl<T: AccountProvider> DriftClientBackend<T> {
     }
 
     /// Get all drift program accounts by Anchor type
+    #[allow(dead_code)]
     async fn get_program_accounts<U: AccountDeserialize + Discriminator>(
         &self,
     ) -> SdkResult<Vec<U>> {

@@ -1,3 +1,5 @@
+#![allow(clippy::module_inception)]
+
 use dashmap::DashSet;
 use drift::state::oracle::OraclePriceData;
 use drift::state::state::{ExchangeStatus, State};
@@ -507,6 +509,12 @@ impl DLOB {
         } else {
             Some((ask, bid))
         }
+    }
+}
+
+impl Default for DLOB {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

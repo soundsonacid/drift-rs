@@ -19,12 +19,13 @@ pub enum SortDirection {
 }
 
 pub struct NodeToTrigger {
-    pub node: Box<dyn DLOBNode>,
+    pub node: Node,
 }
 
+#[derive(Clone)]
 pub struct NodeToFill {
-    pub node: Box<dyn DLOBNode>,
-    pub maker_nodes: Vec<Box<dyn DLOBNode>>,
+    pub node: Node,
+    pub maker_nodes: Vec<Node>,
 }
 
 pub trait DLOBNode {
@@ -35,6 +36,8 @@ pub trait DLOBNode {
     fn get_order(&self) -> &Order;
     fn get_user_account(&self) -> Pubkey;
     fn set_order(&mut self, order: Order);
+    fn set_have_filled(&mut self, have_filled: bool);
+    fn set_have_trigger(&mut self, have_trigger: bool);
     fn get_node_type(&self) -> NodeType;
     fn set_node_type(&mut self, node_type: NodeType);
 }
@@ -175,6 +178,20 @@ impl DLOBNode for Node {
         }
     }
 
+    fn set_have_filled(&mut self, have_filled: bool) {
+        match self {
+            Node::OrderNode(order_node) => order_node.have_filled = have_filled,
+            Node::VAMMNode(_) => unimplemented!(),
+        }
+    }
+
+    fn set_have_trigger(&mut self, have_trigger: bool) {
+        match self {
+            Node::OrderNode(order_node) => order_node.have_trigger = have_trigger,
+            Node::VAMMNode(_) => unimplemented!(),
+        }
+    }
+
     fn get_node_type(&self) -> NodeType {
         match self {
             Node::OrderNode(order_node) => order_node.get_node_type(),
@@ -195,6 +212,8 @@ pub struct OrderNode {
     pub order: Order,
     pub user_account: Pubkey,
     pub node_type: NodeType,
+    pub have_filled: bool,
+    pub have_trigger: bool,
 }
 
 impl OrderNode {
@@ -203,6 +222,8 @@ impl OrderNode {
             order,
             user_account,
             node_type,
+            have_filled: false,
+            have_trigger: false,
         }
     }
 }
@@ -229,6 +250,14 @@ impl DLOBNode for OrderNode {
             NodeType::Trigger => Some(order.trigger_price.into()),
             NodeType::VAMM => None,
         }
+    }
+
+    fn set_have_filled(&mut self, have_filled: bool) {
+        self.have_filled = have_filled;
+    }
+
+    fn set_have_trigger(&mut self, have_trigger: bool) {
+        self.have_trigger = have_trigger;
     }
 
     fn get_order(&self) -> &Order {
@@ -283,6 +312,14 @@ impl DLOBNode for VAMMNode {
 
     fn get_order(&self) -> &Order {
         &self.order
+    }
+
+    fn set_have_filled(&mut self, _have_filled: bool) {
+        unimplemented!()
+    }
+
+    fn set_have_trigger(&mut self, _have_trigger: bool) {
+        unimplemented!()
     }
 
     fn get_user_account(&self) -> Pubkey {

@@ -121,15 +121,18 @@ mod tests {
             endpoint,
             true,
             Some(vec![get_user_with_order_filter()]),
+            None,
         );
         let _ = slot_subscriber.subscribe().await;
         let _ = usermap.subscribe().await;
 
         let mut dlob_builder = DLOBBuilder::new(slot_subscriber, usermap, 30);
 
-        let start = std::time::Instant::now();
-        dlob_builder.build();
-        let duration = start.elapsed();
-        dbg!(duration);
+        loop {
+            let start = std::time::Instant::now();
+            dlob_builder.build();
+            let duration = start.elapsed();
+            dbg!(duration);
+        }
     }
 }

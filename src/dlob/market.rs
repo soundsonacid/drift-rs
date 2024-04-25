@@ -191,6 +191,7 @@ impl Exchange {
     }
 
     /// for debugging
+    #[allow(dead_code)]
     pub fn perp_size(&self) -> usize {
         let mut size = 0;
         for market in self.perp.iter() {
@@ -204,6 +205,7 @@ impl Exchange {
     }
 
     /// for debugging
+    #[allow(dead_code)]
     pub fn spot_size(&self) -> usize {
         let mut size = 0;
         for market in self.spot.iter() {

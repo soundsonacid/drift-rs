@@ -170,7 +170,6 @@ impl UserMap {
 
     #[allow(clippy::await_holding_lock)]
     async fn sync(&mut self) -> SdkResult<()> {
-        dbg!("syncing");
         let sync_lock = self.sync_lock.as_ref().expect("expected sync lock");
 
         let callback = match self.optional_callback {
@@ -224,8 +223,6 @@ impl UserMap {
             self.latest_slot
                 .store(accounts.context.slot, Ordering::Relaxed);
         }
-
-        dbg!("sync over");
 
         drop(lock);
         Ok(())

@@ -1,13 +1,17 @@
-use std::collections::BinaryHeap;
+use mut_binary_heap::BinaryHeap;
 
 use dashmap::DashMap;
+use drift::state::user::Order;
+use solana_sdk::pubkey::Pubkey;
 
 use crate::dlob::dlob_node::{get_order_signature, DLOBNode, DirectionalNode, Node, SortDirection};
 
+use super::market::SubType;
+
 #[derive(Clone, Debug)]
 pub struct Orderlist {
-    pub bids: BinaryHeap<DirectionalNode>,
-    pub asks: BinaryHeap<DirectionalNode>,
+    pub bids: BinaryHeap<String, DirectionalNode>,
+    pub asks: BinaryHeap<String, DirectionalNode>,
     pub order_sigs: DashMap<String, Node>,
     bid_sort_direction: SortDirection,
     ask_sort_direction: SortDirection,
@@ -34,14 +38,14 @@ impl Orderlist {
         let order_sig = get_order_signature(node.get_order().order_id, node.get_user_account());
         self.order_sigs.insert(order_sig.clone(), node);
         let directional = DirectionalNode::new(node, self.bid_sort_direction);
-        self.bids.push(directional);
+        self.bids.push(order_sig, directional);
     }
 
     pub fn insert_ask(&mut self, node: Node) {
         let order_sig = get_order_signature(node.get_order().order_id, node.get_user_account());
         self.order_sigs.insert(order_sig.clone(), node);
         let directional = DirectionalNode::new(node, self.ask_sort_direction);
-        self.asks.push(directional);
+        self.asks.push(order_sig, directional);
     }
 
     pub fn get_best_bid(&mut self) -> Option<Node> {
@@ -80,6 +84,21 @@ impl Orderlist {
 
     pub fn size(&self) -> usize {
         self.bids.len() + self.asks.len()
+    }
+
+    pub fn update(&mut self, order: &Order, user_account: &Pubkey, subtype: SubType) {
+        let order_sig = get_order_signature(order.order_id, *user_account);
+        if let Some(mut node) = self.order_sigs.get_mut(&order_sig) {
+            node.set_order(order.clone());
+            let heap = match subtype {
+                SubType::Bid => &mut self.bids,
+                SubType::Ask => &mut self.asks,
+                _ => panic!("Invalid subtype"),
+            };
+            if let Some(mut node) = heap.get_mut(&order_sig) {
+                node.node.set_order(order.clone());
+            }
+        }
     }
 }
 

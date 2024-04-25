@@ -91,3 +91,11 @@ fn get_auction_price_for_oracle_offset_auction(
 
     oracle_price as i128 + price_offset
 }
+
+pub fn is_fallback_available(order: &Order, min_auction_duration: u8, slot: u64) -> bool {
+    if min_auction_duration == 0 {
+        return true;
+    }
+
+    (order.slot + min_auction_duration as u64) < slot
+}

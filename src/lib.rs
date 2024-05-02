@@ -687,6 +687,10 @@ impl<T: AccountProvider> DriftClient<T> {
         self.backend
             .get_oracle_price_data_and_slot_for_spot_market(market_index)
     }
+
+    pub fn get_state_account(&self) -> State {
+        self.backend.state_account.read().unwrap().clone()
+    }
 }
 
 /// Provides the heavy-lifting and network facing features of the SDK

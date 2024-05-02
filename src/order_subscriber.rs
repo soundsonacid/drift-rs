@@ -1,25 +1,9 @@
-use std::{sync::Mutex, time::Instant};
-
 use drift::state::user::User;
-use serde_json::json;
-use solana_account_decoder::UiAccountEncoding;
-use solana_client::{
-    nonblocking::rpc_client::RpcClient,
-    rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
-    rpc_request::RpcRequest,
-    rpc_response::{OptionalContext, RpcKeyedAccount},
-};
 use solana_sdk::commitment_config::CommitmentConfig;
 
 use crate::{
-    event_emitter::EventEmitter,
-    memcmp::{get_user_filter, get_user_with_order_filter},
-    usermap::UserMap,
-    utils::decode,
-    websocket_program_account_subscriber::{
-        ProgramAccountUpdate, WebsocketProgramAccountOptions, WebsocketProgramAccountSubscriber,
-    },
-    DataAndSlot, SdkResult,
+    event_emitter::EventEmitter, memcmp::get_user_with_order_filter, usermap::UserMap,
+    websocket_program_account_subscriber::ProgramAccountUpdate, SdkResult,
 };
 
 pub struct OrderSubscriberConfig {
@@ -95,14 +79,16 @@ mod tests {
         let emitter = order_subscriber.event_emitter;
 
         emitter.subscribe(OrderSubscriber::SUBSCRIPTION_ID, move |event| {
+            let mut count: i32 = 0;
             if let Some(event) = event.as_any().downcast_ref::<ProgramAccountUpdate<User>>() {
-                log::info!("{:?}", event.now.elapsed());
+                count += 1;
+                dbg!(count);
             }
         });
 
         order_subscriber.subscribe().await.unwrap();
 
-        tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
         dbg!(order_subscriber.subscriber.size());
 
         let _ = order_subscriber.unsubscribe().await;

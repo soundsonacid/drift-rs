@@ -35,12 +35,12 @@ pub fn get_auction_price(order: &Order, slot: u64, price: i64) -> i128 {
 }
 
 fn get_auction_price_for_fixed_auction(order: &Order, slot: u64) -> i128 {
-    let slots_elapsed = slot - order.slot;
+    let slots_elapsed = slot as i64 - order.slot as i64;
 
     let auction_start_price = order.auction_start_price as i128;
     let auction_end_price = order.auction_end_price as i128;
     let delta_denominator: i128 = order.auction_duration.into();
-    let delta_numerator: i128 = min(slots_elapsed, order.auction_duration as u64).into();
+    let delta_numerator: i128 = min(slots_elapsed, order.auction_duration as i64).into();
 
     if delta_denominator == 0 {
         return auction_start_price;
@@ -65,12 +65,12 @@ fn get_auction_price_for_oracle_offset_auction(
     slot: u64,
     oracle_price: i64,
 ) -> i128 {
-    let slots_elapsed = slot - order.slot;
+    let slots_elapsed = slot as i64 - order.slot as i64;
 
     let auction_start_price = order.auction_start_price as i128;
     let auction_end_price = order.auction_end_price as i128;
     let delta_denominator: i128 = order.auction_duration.into();
-    let delta_numerator: i128 = min(slots_elapsed, order.auction_duration as u64).into();
+    let delta_numerator: i128 = min(slots_elapsed, order.auction_duration as i64).into();
 
     if delta_denominator == 0 {
         return auction_start_price;

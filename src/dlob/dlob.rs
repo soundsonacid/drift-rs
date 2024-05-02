@@ -7,7 +7,6 @@ use drift::state::user::{MarketType, Order, OrderStatus};
 use mut_binary_heap::BinaryHeap;
 use solana_sdk::pubkey::Pubkey;
 use std::any::Any;
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -197,9 +196,15 @@ impl DLOB {
         market_index: u16,
     ) -> Vec<Node> {
         let market = match market_type {
-            MarketType::Perp => self.exchange.perp.get_mut(&market_index).expect("market"),
-            MarketType::Spot => self.exchange.spot.get_mut(&market_index).expect("market"),
+            MarketType::Perp => self.exchange.perp.get_mut(&market_index),
+            MarketType::Spot => self.exchange.spot.get_mut(&market_index),
         };
+
+        if market.is_none() {
+            return vec![];
+        }
+
+        let market = market.unwrap();
         let mut order_list = market.get_order_list_for_node_type(node_type);
 
         let mut best_orders: Vec<Node> = vec![];
@@ -314,7 +319,7 @@ impl DLOB {
     }
 
     pub fn get_taking_orders(
-        &mut self,
+        &self,
         slot: u64,
         market_type: MarketType,
         market_index: u16,
@@ -347,23 +352,29 @@ impl DLOB {
         all_orders
     }
 
-    fn find_nodes_to_trigger(
+    pub fn find_nodes_to_trigger(
         self,
         market_index: u16,
         market_type: MarketType,
         oracle_price: u64,
         state: State,
-    ) {
+    ) -> Option<Vec<NodeToTrigger>> {
         if state.exchange_status != ExchangeStatus::active() {
-            return;
+            return None;
         }
 
         let mut nodes_to_trigger = vec![];
 
         let market = match market_type {
-            MarketType::Perp => self.exchange.perp.get_mut(&market_index).expect("market"),
-            MarketType::Spot => self.exchange.spot.get_mut(&market_index).expect("market"),
+            MarketType::Perp => self.exchange.perp.get_mut(&market_index),
+            MarketType::Spot => self.exchange.spot.get_mut(&market_index),
         };
+
+        if market.is_none() {
+            return None;
+        }
+
+        let market = market.unwrap();
 
         let mut trigger_above_list = market.trigger_orders.bids.clone();
         let mut trigger_below_list = market.trigger_orders.asks.clone();
@@ -385,10 +396,12 @@ impl DLOB {
                 break;
             }
         }
+
+        Some(nodes_to_trigger)
     }
 
-    fn find_nodes_to_fill(
-        &mut self,
+    pub fn find_nodes_to_fill(
+        &self,
         market: Box<&dyn MarketOperations>,
         fallback_bid: Option<u64>,
         fallback_ask: Option<u64>,
@@ -445,7 +458,7 @@ impl DLOB {
     }
 
     fn find_resting_orders_to_fill(
-        &mut self,
+        &self,
         market: Box<&dyn MarketOperations>,
         slot: u64,
         oracle_price_data: OraclePriceData,
@@ -516,7 +529,7 @@ impl DLOB {
     }
 
     fn find_taking_orders_to_fill(
-        &mut self,
+        &self,
         market: Box<&dyn MarketOperations>,
         slot: u64,
         oracle_price_data: OraclePriceData,
@@ -642,9 +655,15 @@ impl DLOB {
         let mut nodes_to_fill: Vec<NodeToFill> = vec![];
 
         let markets = match market_type {
-            MarketType::Perp => self.exchange.perp.get_mut(&market_index).expect("market"),
-            MarketType::Spot => self.exchange.spot.get_mut(&market_index).expect("market"),
+            MarketType::Perp => self.exchange.perp.get_mut(&market_index),
+            MarketType::Spot => self.exchange.spot.get_mut(&market_index),
         };
+
+        if markets.is_none() {
+            return nodes_to_fill;
+        }
+
+        let markets = markets.unwrap();
 
         let mut bids = [
             markets.taking_limit_orders.bids.clone(),
@@ -688,7 +707,7 @@ impl DLOB {
     }
 
     fn find_crossing_resting_limit_orders(
-        &mut self,
+        &self,
         market: Box<&dyn MarketOperations>,
         slot: u64,
         oracle_price_data: OraclePriceData,
@@ -792,6 +811,7 @@ impl DLOB {
             }
         }
 
+        log::info!("crossing resting limit orders: {}", nodes_to_fill.len());
         nodes_to_fill
     }
 
@@ -929,6 +949,7 @@ impl DLOB {
             }
         }
 
+        log::info!("crossing taking orders: {}", nodes_to_fill.len());
         nodes_to_fill
     }
 }

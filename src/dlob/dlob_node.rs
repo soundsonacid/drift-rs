@@ -22,7 +22,7 @@ pub struct NodeToTrigger {
     pub node: Node,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NodeToFill {
     pub node: Node,
     pub maker_nodes: Vec<Node>,

@@ -27,7 +27,7 @@ pub struct UserMap {
     pub(crate) subscribed: bool,
     subscription: WebsocketProgramAccountSubscriber,
     pub(crate) usermap: Arc<DashMap<String, User>>,
-    sync_lock: Option<Mutex<()>>,
+    sync_lock: Option<tokio::sync::Mutex<()>>,
     latest_slot: Arc<AtomicU64>,
     commitment: CommitmentConfig,
     rpc: RpcClient,
@@ -66,7 +66,11 @@ impl UserMap {
 
         let rpc = RpcClient::new_with_commitment(endpoint.clone(), commitment);
 
-        let sync_lock = if sync { Some(Mutex::new(())) } else { None };
+        let sync_lock = if sync {
+            Some(tokio::sync::Mutex::new(()))
+        } else {
+            None
+        };
 
         Self {
             subscribed: false,
